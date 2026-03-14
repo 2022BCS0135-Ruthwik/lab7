@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = '2022bcs0135ruthwik/wine-mlops-2022bcs0135_lab6:latest'
+        DOCKER_IMAGE = '2022bcs0135ruthwik/wine_mlops_lab4_2022bcs0135:latest'
         CONTAINER_NAME = 'wine-mlops-api'
         PORT = '8000'
     }
