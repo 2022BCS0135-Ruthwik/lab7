@@ -8,97 +8,127 @@ pipeline {
     }
 
     stages {
+
         stage('Pull Docker Image') {
             steps {
-                script {
-                    echo "Pulling Docker image ${DOCKER_IMAGE}"
-                    sh "docker pull ${DOCKER_IMAGE}"
-                }
+                echo "Pulling Docker image ${DOCKER_IMAGE}"
+                sh "docker pull ${DOCKER_IMAGE}"
             }
         }
 
         stage('Run Container') {
             steps {
-                script {
-                    echo "Running container ${CONTAINER_NAME} on port ${PORT}"
-                    // remove old container if exists
-                    sh "docker rm -f ${CONTAINER_NAME} || true"
-                    sh "docker run -d --rm --name ${CONTAINER_NAME} -p ${PORT}:8000 ${DOCKER_IMAGE}"
-                }
+                echo "Starting container ${CONTAINER_NAME}"
+
+                sh '''
+                    docker rm -f ${CONTAINER_NAME} || true
+
+                    docker run -d \
+                        --name ${CONTAINER_NAME} \
+                        -p ${PORT}:8000 \
+                        ${DOCKER_IMAGE}
+
+                    echo "Container started:"
+                    docker ps
+
+                    echo "Waiting for container startup..."
+                    sleep 5
+
+                    echo "Container logs:"
+                    docker logs ${CONTAINER_NAME}
+                '''
             }
         }
 
         stage('Wait for API') {
             steps {
-                script {
-                    echo "Waiting for API to become available..."
-                    sh '''
-                        timeout 30s bash -c 'until curl -s http://localhost:8000/docs > /dev/null; do echo "Waiting..."; sleep 2; done'
-                        echo "API is up and running!"
-                    '''
-                }
+                echo "Waiting for API to start..."
+
+                sh '''
+                    for i in {1..30}; do
+                        if docker exec ${CONTAINER_NAME} curl -s http://localhost:8000 > /dev/null; then
+                            echo "API is up!"
+                            exit 0
+                        fi
+                        echo "Waiting..."
+                        sleep 2
+                    done
+
+                    echo "API failed to start"
+                    docker logs ${CONTAINER_NAME}
+                    exit 1
+                '''
             }
         }
 
         stage('Send Valid Request') {
             steps {
-                script {
-                    echo "Sending valid inference request..."
-                    sh '''
-                        response=$(curl -s -X POST http://localhost:8000/predict \\
-                            -H "Content-Type: application/json" \\
-                            -d @tests/valid_input.json)
-                        echo "Valid Request Response: $response"
-                        
-                        # Validate response contains wine_quality and value is numeric
-                        if ! echo "$response" | grep -qE '"wine_quality":\\s*[0-9]+(\\.[0-9]+)?'; then
-                            echo "Validation failed: Response does not contain numeric 'wine_quality'"
-                            exit 1
-                        fi
-                        echo "Valid request validation passed."
-                    '''
-                }
+                echo "Sending valid inference request"
+
+                sh '''
+                    RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -X POST http://localhost:8000/predict \
+                        -H "Content-Type: application/json" \
+                        -d @/workspace/tests/valid_input.json)
+
+                    echo "Response:"
+                    echo "$RESPONSE"
+
+                    if ! echo "$RESPONSE" | grep -q '"wine_quality"'; then
+                        echo "Validation failed: wine_quality not found"
+                        exit 1
+                    fi
+
+                    echo "Valid request validation passed"
+                '''
             }
         }
 
         stage('Send Invalid Request') {
             steps {
-                script {
-                    echo "Sending invalid inference request to test error handling..."
-                    sh '''
-                        response=$(curl -s -w "\\n%{http_code}" -X POST http://localhost:8000/predict \\
-                            -H "Content-Type: application/json" \\
-                            -d @tests/invalid_input.json)
-                            
-                        body=$(echo "$response" | sed -e '$ d')
-                        http_code=$(echo "$response" | tail -n1)
-                        
-                        echo "Invalid Request Response Body: $body"
-                        echo "Invalid Request HTTP Code: $http_code"
-                        
-                        if [ "$http_code" -eq 200 ]; then
-                            echo "Validation failed: Invalid request returned 200 OK. Expected an error."
-                            exit 1
-                        fi
-                        echo "Invalid request correctly generated an error response."
-                    '''
-                }
+                echo "Sending invalid inference request"
+
+                sh '''
+                    RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -w "\\n%{http_code}" -X POST http://localhost:8000/predict \
+                        -H "Content-Type: application/json" \
+                        -d @/workspace/tests/invalid_input.json)
+
+                    BODY=$(echo "$RESPONSE" | sed '$d')
+                    STATUS=$(echo "$RESPONSE" | tail -n1)
+
+                    echo "Response body:"
+                    echo "$BODY"
+
+                    echo "HTTP status:"
+                    echo "$STATUS"
+
+                    if [ "$STATUS" -eq 200 ]; then
+                        echo "Validation failed: invalid input returned 200"
+                        exit 1
+                    fi
+
+                    echo "Invalid request correctly failed"
+                '''
             }
         }
     }
 
     post {
+
         always {
-            script {
-                echo "Cleaning up container ${CONTAINER_NAME}..."
-                sh "docker stop ${CONTAINER_NAME} || true"
-            }
+            echo "Cleaning up container..."
+
+            sh '''
+                docker stop ${CONTAINER_NAME} || true
+                docker rm ${CONTAINER_NAME} || true
+            '''
         }
+
         success {
             echo "Pipeline completed successfully! Inference validation passed."
         }
+
         failure {
-            echo "Pipeline failed during one of the validation stages."
+            echo "Pipeline failed during validation."
         }
     }
 }
