@@ -32,7 +32,8 @@ pipeline {
                 sh '''
                 echo "Checking API inside container..."
 
-                for i in {1..20}; do
+                i=1
+                while [ $i -le 20 ]; do
                     docker exec ${CONTAINER_NAME} curl -s http://localhost:8000/predict \
                     -X POST \
                     -H "Content-Type: application/json" \
@@ -41,6 +42,7 @@ pipeline {
 
                     echo "Waiting for API..."
                     sleep 2
+                    i=$((i + 1))
                 done
 
                 echo "API failed to start"
