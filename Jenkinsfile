@@ -4,111 +4,89 @@ pipeline {
     environment {
         DOCKER_IMAGE = '2022bcs0135ruthwik/wine_mlops_lab4_2022bcs0135:latest'
         CONTAINER_NAME = 'wine-mlops-api'
-        PORT = '8000'
     }
 
     stages {
 
         stage('Pull Docker Image') {
             steps {
-                echo "Pulling Docker image ${DOCKER_IMAGE}"
-                sh "docker pull ${DOCKER_IMAGE}"
+                sh 'docker pull ${DOCKER_IMAGE}'
             }
         }
 
         stage('Run Container') {
             steps {
-                echo "Starting container ${CONTAINER_NAME}"
-
                 sh '''
-                    docker rm -f ${CONTAINER_NAME} || true
-                    docker run -d --name ${CONTAINER_NAME} -p ${PORT}:8000 ${DOCKER_IMAGE}
+                docker rm -f ${CONTAINER_NAME} || true
+                docker run -d --name ${CONTAINER_NAME} -p 8000:8000 ${DOCKER_IMAGE}
 
-                    echo "Container started:"
-                    docker ps --filter "name=${CONTAINER_NAME}"
-
-                    echo "Waiting for container startup..."
-                    sleep 5
-
-                    echo "Container logs:"
-                    docker logs ${CONTAINER_NAME} || true
+                echo "Running containers:"
+                docker ps
+                sleep 5
                 '''
             }
         }
 
         stage('Wait for API') {
             steps {
-                echo "Checking if API is ready..."
-
                 sh '''
-                    for i in {1..20}; do
-                        STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                        -X POST http://localhost:${PORT}/predict \
-                        -H "Content-Type: application/json" \
-                        -d @tests/valid_input.json)
+                echo "Checking API inside container..."
 
-                        if [ "$STATUS" -eq 200 ]; then
-                            echo "API is ready!"
-                            exit 0
-                        fi
+                for i in {1..20}; do
+                    docker exec ${CONTAINER_NAME} curl -s http://localhost:8000/predict \
+                    -X POST \
+                    -H "Content-Type: application/json" \
+                    -d '{"alcohol":9.4,"sulphates":0.56,"citric_acid":0.0,"volatile_acidity":0.7,"density":0.9978}' \
+                    > /dev/null && echo "API ready" && exit 0
 
-                        echo "Waiting for API... attempt $i"
-                        sleep 2
-                    done
+                    echo "Waiting for API..."
+                    sleep 2
+                done
 
-                    echo "API failed to start"
-                    docker logs ${CONTAINER_NAME}
-                    exit 1
+                echo "API failed to start"
+                docker logs ${CONTAINER_NAME}
+                exit 1
                 '''
             }
         }
 
         stage('Send Valid Request') {
             steps {
-                echo "Sending valid inference request"
-
                 sh '''
-                    RESPONSE=$(curl -s -X POST http://localhost:${PORT}/predict \
-                        -H "Content-Type: application/json" \
-                        -d @tests/valid_input.json)
+                RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s \
+                -X POST http://localhost:8000/predict \
+                -H "Content-Type: application/json" \
+                -d '{"alcohol":9.4,"sulphates":0.56,"citric_acid":0.0,"volatile_acidity":0.7,"density":0.9978}')
 
-                    echo "Response:"
-                    echo "$RESPONSE"
+                echo "Valid Response:"
+                echo "$RESPONSE"
 
-                    if ! echo "$RESPONSE" | grep -q '"wine_quality"'; then
-                        echo "Validation failed: wine_quality not found"
-                        exit 1
-                    fi
-
-                    echo "Valid request validation passed"
+                echo "$RESPONSE" | grep wine_quality
                 '''
             }
         }
 
         stage('Send Invalid Request') {
             steps {
-                echo "Sending invalid inference request"
-
                 sh '''
-                    RESPONSE=$(curl -s -w "\\n%{http_code}" -X POST http://localhost:${PORT}/predict \
-                        -H "Content-Type: application/json" \
-                        -d @tests/invalid_input.json)
+                RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -w "\\n%{http_code}" \
+                -X POST http://localhost:8000/predict \
+                -H "Content-Type: application/json" \
+                -d '{"alcohol":"bad"}')
 
-                    BODY=$(echo "$RESPONSE" | sed '$d')
-                    STATUS=$(echo "$RESPONSE" | tail -n1)
+                BODY=$(echo "$RESPONSE" | sed '$d')
+                CODE=$(echo "$RESPONSE" | tail -n1)
 
-                    echo "Response body:"
-                    echo "$BODY"
+                echo "Invalid Response Body:"
+                echo "$BODY"
 
-                    echo "HTTP status:"
-                    echo "$STATUS"
+                echo "HTTP Code:"
+                echo "$CODE"
 
-                    if [ "$STATUS" -eq 200 ]; then
-                        echo "Validation failed: invalid input returned 200"
-                        exit 1
-                    fi
-
-                    echo "Invalid request correctly failed"
+                if [ "$CODE" -eq 200 ]; then
+                    echo "Invalid request incorrectly succeeded"
+                    exit 1
+                fi
                 '''
             }
         }
@@ -116,20 +94,10 @@ pipeline {
 
     post {
         always {
-            echo "Cleaning up container..."
-
             sh '''
-                docker stop ${CONTAINER_NAME} || true
-                docker rm ${CONTAINER_NAME} || true
+            docker stop ${CONTAINER_NAME} || true
+            docker rm ${CONTAINER_NAME} || true
             '''
-        }
-
-        success {
-            echo "Pipeline completed successfully! Inference validation passed."
-        }
-
-        failure {
-            echo "Pipeline failed during validation."
         }
     }
 }
