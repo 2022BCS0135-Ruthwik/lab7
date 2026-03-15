@@ -37,7 +37,7 @@ pipeline {
                     docker exec ${CONTAINER_NAME} curl -s http://localhost:8000/predict \
                     -X POST \
                     -H "Content-Type: application/json" \
-                    -d '{"alcohol":9.4,"sulphates":0.56,"citric_acid":0.0,"volatile_acidity":0.7,"density":0.9978}' \
+                    -d @tests/valid_input.json \
                     > /dev/null && echo "API ready" && exit 0
 
                     echo "Waiting for API..."
@@ -58,7 +58,7 @@ pipeline {
                 RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s \
                 -X POST http://localhost:8000/predict \
                 -H "Content-Type: application/json" \
-                -d '{"alcohol":9.4,"sulphates":0.56,"citric_acid":0.0,"volatile_acidity":0.7,"density":0.9978}')
+                -d @tests/valid_input.json)
 
                 echo "Valid Response:"
                 echo "$RESPONSE"
@@ -74,7 +74,7 @@ pipeline {
                 RESPONSE=$(docker exec ${CONTAINER_NAME} curl -s -w "\\n%{http_code}" \
                 -X POST http://localhost:8000/predict \
                 -H "Content-Type: application/json" \
-                -d '{"alcohol":"bad"}')
+                -d @tests/invalid_input.json)
 
                 BODY=$(echo "$RESPONSE" | sed '$d')
                 CODE=$(echo "$RESPONSE" | tail -n1)
